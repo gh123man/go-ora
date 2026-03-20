@@ -129,7 +129,7 @@ func TestGenerateGoldenData(t *testing.T) {
 
 // TestCharsetRegressionVsGolden validates the current NewStringConverter implementation
 // against golden data captured from the original 78K-line implementation.
-// This ensures the x/text adapter produces identical results.
+// This ensures the zstd-binary-blob implementation produces identical results.
 func TestCharsetRegressionVsGolden(t *testing.T) {
 	data, err := os.ReadFile("testdata/golden_charsets.json")
 	if err != nil {

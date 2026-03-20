@@ -14,12 +14,13 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/binary"
+	"fmt"
 	"sync"
 
 	"github.com/DataDog/zstd"
 )
 
-//go:embed testdata/charsets.bin.zst
+//go:embed charsetdata/charsets.bin.zst
 var charsetDataZst []byte
 
 var (
@@ -27,15 +28,29 @@ var (
 	charsetOnce sync.Once
 )
 
+// binaryReader wraps a bytes.Reader and accumulates the first read error,
+// allowing callers to check once at the end rather than after every read.
+type binaryReader struct {
+	r   *bytes.Reader
+	err error
+}
+
+func (br *binaryReader) read(v any) {
+	if br.err == nil {
+		br.err = binary.Read(br.r, binary.LittleEndian, v)
+	}
+}
+
 func loadCharsets() {
 	data, err := zstd.Decompress(nil, charsetDataZst)
 	if err != nil {
 		panic("go-ora: failed to decompress charset data: " + err.Error())
 	}
 
-	r := bytes.NewReader(data)
+	br := &binaryReader{r: bytes.NewReader(data)}
+
 	var count uint16
-	binary.Read(r, binary.LittleEndian, &count)
+	br.read(&count)
 
 	charsetMap = make(map[int]*StringConverter, count)
 
@@ -44,15 +59,15 @@ func loadCharsets() {
 		var charWidth uint8
 		var eReplace, dReplace uint16
 
-		binary.Read(r, binary.LittleEndian, &langID)
-		binary.Read(r, binary.LittleEndian, &charWidth)
-		binary.Read(r, binary.LittleEndian, &eReplace)
-		binary.Read(r, binary.LittleEndian, &dReplace)
+		br.read(&langID)
+		br.read(&charWidth)
+		br.read(&eReplace)
+		br.read(&dReplace)
 
-		dBuffer := readU16Slice(r)
-		dBuffer2 := readU16SliceLarge(r)
-		eBuffer := readU16KeyI32ValMap(r)
-		leading := readU16Map(r)
+		dBuffer := readU16Slice(br)
+		dBuffer2 := readU16SliceLarge(br)
+		eBuffer := readU16KeyI32ValMap(br)
+		leading := readU16Map(br)
 
 		charsetMap[int(langID)] = &StringConverter{
 			LangID:    int(langID),
@@ -65,41 +80,45 @@ func loadCharsets() {
 			leading:   leading,
 		}
 	}
+
+	if br.err != nil {
+		panic(fmt.Sprintf("go-ora: failed to deserialize charset data: %v", br.err))
+	}
 }
 
-func readU16Slice(r *bytes.Reader) []int {
+func readU16Slice(br *binaryReader) []int {
 	var length uint16
-	binary.Read(r, binary.LittleEndian, &length)
+	br.read(&length)
 	if length == 0 {
 		return nil
 	}
 	s := make([]int, length)
 	for i := range s {
 		var v uint16
-		binary.Read(r, binary.LittleEndian, &v)
+		br.read(&v)
 		s[i] = int(v)
 	}
 	return s
 }
 
-func readU16SliceLarge(r *bytes.Reader) []int {
+func readU16SliceLarge(br *binaryReader) []int {
 	var length uint32
-	binary.Read(r, binary.LittleEndian, &length)
+	br.read(&length)
 	if length == 0 {
 		return nil
 	}
 	s := make([]int, length)
 	for i := range s {
 		var v uint16
-		binary.Read(r, binary.LittleEndian, &v)
+		br.read(&v)
 		s[i] = int(v)
 	}
 	return s
 }
 
-func readU16KeyI32ValMap(r *bytes.Reader) map[int]int {
+func readU16KeyI32ValMap(br *binaryReader) map[int]int {
 	var length uint16
-	binary.Read(r, binary.LittleEndian, &length)
+	br.read(&length)
 	if length == 0 {
 		return nil
 	}
@@ -107,46 +126,36 @@ func readU16KeyI32ValMap(r *bytes.Reader) map[int]int {
 	for i := 0; i < int(length); i++ {
 		var k uint16
 		var v int32
-		binary.Read(r, binary.LittleEndian, &k)
-		binary.Read(r, binary.LittleEndian, &v)
+		br.read(&k)
+		br.read(&v)
 		m[int(k)] = int(v)
 	}
 	return m
 }
 
-func readU16Map(r *bytes.Reader) map[int]int {
+func readU16Map(br *binaryReader) map[int]int {
 	var length uint16
-	binary.Read(r, binary.LittleEndian, &length)
+	br.read(&length)
 	if length == 0 {
 		return nil
 	}
 	m := make(map[int]int, length)
 	for i := 0; i < int(length); i++ {
 		var k, v uint16
-		binary.Read(r, binary.LittleEndian, &k)
-		binary.Read(r, binary.LittleEndian, &v)
+		br.read(&k)
+		br.read(&v)
 		m[int(k)] = int(v)
 	}
 	return m
 }
 
-// NewStringConverter returns an IStringConverter for the given Oracle charset ID.
+// NewStringConverter returns an IStringConverter for the given Oracle charset ID,
+// or nil if the charset ID is not recognized (matching the original library behavior).
 // Charset tables are loaded from an embedded zstd-compressed binary blob on first call.
 func NewStringConverter(langID int) IStringConverter {
-	// UTF-8 and UTF-16 use simple pass-through — no tables needed
-	switch {
-	case langID >= 870 && langID <= 873:
-		return &StringConverter{LangID: langID, CharWidth: 1}
-	case langID == 2000 || langID == 2002:
-		return &StringConverter{LangID: langID, CharWidth: 2}
-	}
-
 	charsetOnce.Do(loadCharsets)
-
 	if sc, ok := charsetMap[langID]; ok {
 		return sc.Clone()
 	}
-
-	// Unknown charset: fallback to UTF-8 pass-through
-	return &StringConverter{LangID: langID, CharWidth: 1}
+	return nil
 }

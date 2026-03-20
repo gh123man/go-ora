@@ -28,7 +28,7 @@ REPO_DIR="$(cd "$CONVERTERS_DIR/../.." && pwd)"
 
 ORIGINAL_FILE="$CONVERTERS_DIR/string_conversion_new.go"
 RAW_BLOB="$CONVERTERS_DIR/testdata/charsets.bin"
-ZSTD_BLOB="$CONVERTERS_DIR/testdata/charsets.bin.zst"
+ZSTD_BLOB="$CONVERTERS_DIR/charsetdata/charsets.bin.zst"
 
 # --- Preflight checks ---
 command -v go >/dev/null 2>&1 || { echo "Error: 'go' is required but not found."; exit 1; }
@@ -57,6 +57,7 @@ git -C "$REPO_DIR" show "$UPSTREAM_COMMIT:v2/converters/string_conversion_new.go
 # --- Step 2: Generate raw binary charset data ---
 echo "==> Generating raw binary charset data"
 mkdir -p "$CONVERTERS_DIR/testdata"
+mkdir -p "$CONVERTERS_DIR/charsetdata"
 cd "$CONVERTERS_DIR"
 go test -run TestGenerateRawCharsetData -v . 2>&1 | tail -3
 
